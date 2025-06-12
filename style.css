@@ -1,0 +1,64 @@
+body {
+  margin: 0;
+  padding: 0;
+  background: #f2f2f2;
+  font-family: Arial, sans-serif;
+}
+header {
+  padding: 10px;
+  text-align: center;
+}
+main {
+  position: relative;
+  overflow-x: auto;
+  white-space: nowrap;
+  padding: 20px;
+  height: 300px;
+}
+#staircase {
+  display: inline-flex;
+  align-items: flex-end;
+}
+.step {
+  display: inline-block;
+  background: #fff;
+  margin-right: 10px;
+  padding: 5px;
+  width: 150px;
+  box-shadow: 0 0 2px rgba(0,0,0,0.2);
+}
+.step .date {
+  font-weight: bold;
+  margin-bottom: 5px;
+}
+#walker {
+  position: absolute;
+  bottom: 160px;
+  left: 0;
+  width: 20px;
+  height: 40px;
+  background: transparent;
+}
+.walk {
+  animation: walk 0.5s steps(2) infinite;
+}
+@keyframes walk {
+  from { background-position: 0 0; }
+  to { background-position: -40px 0; }
+}
+/* Walker sprite using linear gradients to form pixels */
+#walker::before {
+  content: "";
+  position: absolute;
+  width: 20px;
+  height: 40px;
+  background:
+    linear-gradient(#777 0 0) 4px 0/12px 4px,
+    linear-gradient(#777 0 0) 2px 4px/16px 4px,
+    linear-gradient(#777 0 0) 0 8px/20px 4px,
+    linear-gradient(#777 0 0) 4px 12px/12px 12px,
+    linear-gradient(#777 0 0) 0 24px/20px 4px,
+    linear-gradient(#777 0 0) 2px 28px/16px 4px,
+    linear-gradient(#777 0 0) 6px 32px/8px 8px;
+  background-repeat: no-repeat;
+}
