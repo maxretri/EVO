@@ -1,0 +1,172 @@
+//@version=5
+strategy("15m Opening Range Breakout", overlay=true, initial_capital=100000, default_qty_type=strategy.fixed, calc_on_every_tick=true, max_lines_count=500, max_boxes_count=500, max_labels_count=500)
+
+// ==== Inputs ====
+string sessionTz = input.timezone("America/New_York", "Session Timezone")
+string sessionWindow = input.session("0930-0945", "Opening Range Window")
+int lineExtendBars = input.int(5, "Range Line Length (bars)", minval=1)
+color rangeFillColor = input.color(color.new(color.teal, 85), "Range Fill Color")
+color rangeLineColor = input.color(color.teal, "Range Line Color")
+string riskMode = input.string("Fixed Dollar", "Risk Mode", options=["Fixed Dollar", "Percent Equity"], tooltip="Choose between fixed-dollar risk or a percentage of current equity")
+float fixedDollarRisk = input.float(1000.0, "Fixed Dollar Risk", minval=0)
+float equityRiskPct = input.float(1.0, "Percent Equity Risk", minval=0, maxval=100, step=0.1)
+float profitLockR = input.float(0.1, "Locked Profit (R)", minval=0, step=0.05, tooltip="Move the stop to this many R into profit once 0.5R is reached")
+
+// Constants
+float stopMoveTriggerR = 0.5
+float takeProfitR = 2.0
+
+// ==== Session Tracking ====
+bool inSession = not na(time(timeframe.period, sessionWindow, sessionTz))
+bool newSessionBar = inSession and not inSession[1]
+bool sessionFinishedBar = not inSession and inSession[1]
+bool newDay = ta.change(time("D", "", sessionTz)) != 0
+
+var float sessionHigh = na
+var float sessionLow = na
+var float breakoutHigh = na
+var float breakoutLow = na
+var float rangeSize = na
+var bool rangeReady = false
+
+var box rangeBox = na
+
+var float longStopPrice = na
+var float shortStopPrice = na
+var float longTargetPrice = na
+var float shortTargetPrice = na
+var bool longStopMoved = false
+var bool shortStopMoved = false
+
+if newDay
+    sessionHigh := na
+    sessionLow := na
+    breakoutHigh := na
+    breakoutLow := na
+    rangeSize := na
+    rangeReady := false
+    if strategy.position_size == 0
+        longStopPrice := na
+        shortStopPrice := na
+        longTargetPrice := na
+        shortTargetPrice := na
+        longStopMoved := false
+        shortStopMoved := false
+    if not na(rangeBox)
+        box.delete(rangeBox)
+        rangeBox := na
+
+if newSessionBar
+    sessionHigh := high
+    sessionLow := low
+    rangeReady := false
+    longStopMoved := false
+    shortStopMoved := false
+    if not na(rangeBox)
+        box.delete(rangeBox)
+    rangeBox := box.new(bar_index, high, bar_index, low, border_color=rangeLineColor, bgcolor=rangeFillColor)
+
+if inSession
+    sessionHigh := na(sessionHigh) ? high : math.max(sessionHigh, high)
+    sessionLow := na(sessionLow) ? low : math.min(sessionLow, low)
+    if not na(rangeBox)
+        box.set_right(rangeBox, bar_index)
+        box.set_top(rangeBox, sessionHigh)
+        box.set_bottom(rangeBox, sessionLow)
+
+if sessionFinishedBar and not na(sessionHigh) and not na(sessionLow)
+    breakoutHigh := sessionHigh
+    breakoutLow := sessionLow
+    rangeSize := breakoutHigh - breakoutLow
+    rangeReady := rangeSize > 0
+    if rangeReady
+        longStopPrice := breakoutLow
+        shortStopPrice := breakoutHigh
+        longTargetPrice := breakoutHigh + rangeSize * takeProfitR
+        shortTargetPrice := breakoutLow - rangeSize * takeProfitR
+        longStopMoved := false
+        shortStopMoved := false
+        line.new(bar_index, breakoutHigh, bar_index + lineExtendBars, breakoutHigh, extend=extend.none, color=rangeLineColor, width=2)
+        line.new(bar_index, breakoutLow, bar_index + lineExtendBars, breakoutLow, extend=extend.none, color=rangeLineColor, width=2)
+    if not na(rangeBox)
+        box.set_right(rangeBox, bar_index)
+
+// ==== Position Sizing ====
+float riskCapital = switch riskMode
+    "Fixed Dollar" => fixedDollarRisk
+    => strategy.equity * (equityRiskPct * 0.01)
+
+float positionSize = na
+if rangeReady and rangeSize > 0
+    float riskPerUnit = rangeSize * syminfo.pointvalue
+    positionSize := riskPerUnit > 0 ? riskCapital / riskPerUnit : na
+
+bool canTrade = rangeReady and not na(positionSize) and positionSize > 0 and strategy.position_size == 0
+
+// ==== Entry Orders ====
+if canTrade
+    strategy.entry("Long ORB", strategy.long, qty=positionSize, stop=breakoutHigh)
+    strategy.entry("Short ORB", strategy.short, qty=positionSize, stop=breakoutLow)
+
+// ==== Stop Management Helper ====
+moveStopToProfit(bool isLong, float avgPrice, float stopPrice, float triggerR, float lockR) =>
+    float risk = math.abs(avgPrice - stopPrice)
+    bool triggered = false
+    float newStop = stopPrice
+    if risk > 0
+        float triggerPrice = isLong ? avgPrice + risk * triggerR : avgPrice - risk * triggerR
+        bool reached = isLong ? high >= triggerPrice : low <= triggerPrice
+        if reached
+            float lockedPrice = isLong ? avgPrice + risk * lockR : avgPrice - risk * lockR
+            newStop := isLong ? math.max(stopPrice, lockedPrice) : math.min(stopPrice, lockedPrice)
+            triggered := true
+    [triggered, newStop]
+
+// ==== Active Trade Management ====
+if strategy.position_size > 0 and rangeReady
+    if not longStopMoved and not na(longStopPrice)
+        [bool moved, float updatedStop] = moveStopToProfit(true, strategy.position_avg_price, longStopPrice, stopMoveTriggerR, profitLockR)
+        if moved
+            longStopPrice := updatedStop
+            longStopMoved := true
+    strategy.cancel("Short ORB")
+
+if strategy.position_size < 0 and rangeReady
+    if not shortStopMoved and not na(shortStopPrice)
+        [bool movedShort, float updatedShortStop] = moveStopToProfit(false, strategy.position_avg_price, shortStopPrice, stopMoveTriggerR, profitLockR)
+        if movedShort
+            shortStopPrice := updatedShortStop
+            shortStopMoved := true
+    strategy.cancel("Long ORB")
+
+if strategy.position_size == 0
+    longStopMoved := false
+    shortStopMoved := false
+    if rangeReady
+        longStopPrice := breakoutLow
+        shortStopPrice := breakoutHigh
+
+// ==== Exits ====
+float longExitStop = na
+float longExitLimit = na
+float shortExitStop = na
+float shortExitLimit = na
+
+if rangeReady and not na(longStopPrice) and not na(longTargetPrice)
+    longExitStop := longStopPrice
+    longExitLimit := longTargetPrice
+
+if rangeReady and not na(shortStopPrice) and not na(shortTargetPrice)
+    shortExitStop := shortStopPrice
+    shortExitLimit := shortTargetPrice
+
+if strategy.position_size > 0 and not rangeReady and not na(longStopPrice) and not na(longTargetPrice)
+    longExitStop := longStopPrice
+    longExitLimit := longTargetPrice
+
+if strategy.position_size < 0 and not rangeReady and not na(shortStopPrice) and not na(shortTargetPrice)
+    shortExitStop := shortStopPrice
+    shortExitLimit := shortTargetPrice
+
+strategy.exit("Long ORB Exit", from_entry="Long ORB", stop=longExitStop, limit=longExitLimit)
+strategy.exit("Short ORB Exit", from_entry="Short ORB", stop=shortExitStop, limit=shortExitLimit)
